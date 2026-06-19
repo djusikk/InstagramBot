@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -18,15 +19,16 @@ DESCRIPTION_TYPES = {
         "prompt": """Ти топовий копірайтер для Instagram-магазинів. Напиши продаючий опис товару українською мовою.
 
 СТРУКТУРА:
-1. 🔥 ГАЧОК (1 речення — біль або мрія аудиторії)
-2. 💎 ЩО ЦЕ (коротко, 1-2 речення)
-3. ✅ ОФФЕР — 3-4 конкретні вигоди для покупця
-4. ⚡ ТРИГЕР ТЕРМІНОВОСТІ
-5. 📦 УМОВИ (доставка, оплата, гарантія)
-6. 👇 ЗАКЛИК ДО ДІЇ
+1. ГАЧОК (1 речення — біль або мрія аудиторії)
+2. ЩО ЦЕ (коротко, 1-2 речення)
+3. ОФФЕР — 3-4 конкретні вигоди для покупця
+4. ТРИГЕР ТЕРМІНОВОСТІ
+5. УМОВИ (доставка, оплата, гарантія)
+6. ЗАКЛИК ДО ДІЇ
 7. Хештеги (5-7)
 
-ПРАВИЛА: українська жива мова, звертайся на "ти", 150-220 слів"""
+ПРАВИЛА: українська жива мова, звертайся на "ти", 150-220 слів
+ВАЖЛИВО: НЕ використовуй символи * ** # для форматування. Тільки емодзі і звичайний текст."""
     },
     "story": {
         "label": "📖 Сторітелінг (через емоцію)",
@@ -39,7 +41,8 @@ DESCRIPTION_TYPES = {
 4. М'який заклик до дії
 5. Хештеги (5-7)
 
-ПРАВИЛА: емоційно, живо, звертайся на "ти", 130-180 слів"""
+ПРАВИЛА: емоційно, живо, звертайся на "ти", 130-180 слів
+ВАЖЛИВО: НЕ використовуй символи * ** # для форматування. Тільки емодзі і звичайний текст."""
     },
     "minimal": {
         "label": "✨ Мінімалістичний (преміум)",
@@ -51,7 +54,8 @@ DESCRIPTION_TYPES = {
 3. Умови + CTA
 4. Хештеги (3-5)
 
-ПРАВИЛА: чистий впевнений стиль, максимум 100 слів"""
+ПРАВИЛА: чистий впевнений стиль, максимум 100 слів
+ВАЖЛИВО: НЕ використовуй символи * ** # для форматування. Тільки емодзі і звичайний текст."""
     },
     "review": {
         "label": "💬 Від покупця (соціальний доказ)",
@@ -64,15 +68,25 @@ DESCRIPTION_TYPES = {
 4. Рекомендація + CTA
 5. Хештеги (5-7)
 
-ПРАВИЛА: звучить як справжній відгук, 120-160 слів"""
+ПРАВИЛА: звучить як справжній відгук, 120-160 слів
+ВАЖЛИВО: НЕ використовуй символи * ** # для форматування. Тільки емодзі і звичайний текст."""
     }
 }
 
 SYSTEM_PROMPT = """Ти провідний копірайтер для українських Instagram-магазинів.
-Відповідай ТІЛЬКИ готовим описом — без вступних слів і пояснень."""
+Відповідай ТІЛЬКИ готовим описом — без вступних слів і пояснень.
+НІКОЛИ не використовуй * ** # markdown символи. Тільки звичайний текст і емодзі."""
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def clean_text(text: str) -> str:
+    """Видаляє markdown символи з тексту"""
+    text = re.sub(r'\*+', '', text)
+    text = re.sub(r'#+\s?', '', text)
+    text = re.sub(r'_{2,}', '', text)
+    return text.strip()
 
 
 def generate_description(product_info: str, desc_type: str) -> str:
@@ -85,7 +99,7 @@ def generate_description(product_info: str, desc_type: str) -> str:
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}]
     )
-    return message.content[0].text
+    return clean_text(message.content[0].text)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -121,6 +135,7 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         description = generate_description(product_info, desc_type)
         await thinking_msg.delete()
+
         keyboard = [
             [
                 InlineKeyboardButton("🔄 Ще варіант", callback_data=f"regen_{desc_type}"),
@@ -128,12 +143,16 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             ],
             [InlineKeyboardButton("📝 Новий товар", callback_data="new_product")]
         ]
+
+        # Відправляємо опис у monospace блоці для легкого копіювання
         await update.message.reply_text(
             f"✅ Готово! ({DESCRIPTION_TYPES[desc_type]['label']})\n\n"
-            f"{'─' * 30}\n\n{description}\n\n{'─' * 30}",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            f"`{description}`",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="MarkdownV2"
         )
         context.user_data["last_product"] = product_info
+        context.user_data["last_type"] = desc_type
     except Exception as e:
         logger.error(f"Помилка: {e}")
         await thinking_msg.edit_text("❌ Помилка. Спробуй /start")
@@ -163,8 +182,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(
                 f"✅ Новий варіант! ({DESCRIPTION_TYPES[desc_type]['label']})\n\n"
-                f"{'─' * 30}\n\n{description}\n\n{'─' * 30}",
-                reply_markup=InlineKeyboardMarkup(keyboard)
+                f"`{description}`",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="MarkdownV2"
             )
         except Exception as e:
             logger.error(f"Помилка: {e}")
@@ -202,9 +222,12 @@ def main():
             CommandHandler("cancel", cancel),
             CallbackQueryHandler(button_callback, pattern="^(regen_.*|new_type|new_product)$")
         ],
-        allow_reentry=True
+        allow_reentry=True,
+        conversation_timeout=600  # 10 хвилин таймаут
     )
     app.add_handler(conv_handler)
+    # Обробник кнопок поза розмовою (для старих повідомлень)
+    app.add_handler(CallbackQueryHandler(button_callback, pattern="^(regen_.*|new_type|new_product)$"))
     logger.info("Бот запущено!")
     app.run_polling(drop_pending_updates=True)
 
